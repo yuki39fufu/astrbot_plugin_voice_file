@@ -18,6 +18,7 @@ import sys
 import tempfile
 import time
 import uuid
+import wave
 from pathlib import Path
 
 from astrbot.api import AstrBotConfig, logger
@@ -26,6 +27,8 @@ from astrbot.api.message_components import File, Record, Reply
 from astrbot.api.provider import ProviderRequest
 from astrbot.api.star import Context, Star, StarTools
 from astrbot.core.message.message_event_result import MessageChain
+from astrbot.core.platform.message_session import MessageSession
+from astrbot.core.platform.message_type import MessageType
 
 DEFAULT_EXTS = [
     ".txt", ".md", ".markdown", ".csv", ".tsv",
@@ -57,17 +60,16 @@ class VoiceFilePlugin(Star):
         self._rvc_lock = asyncio.Lock()
 
     async def initialize(self) -> None:
-        edge_ok = self._edge_tts_available()
-        if not edge_ok and self._conf_bool("enable_edge_tts", True):
+        tts_ok = self._tts_available()
+        if not tts_ok:
             logger.warning(
-                "[voice_file] 未检测到 edge-tts，语音合成不可用；"
-                "如果这台机器装不了它，请在插件配置里关闭 enable_edge_tts。",
+                "[voice_file] 当前 TTS 模式不可用，语音发送已停用"
+                "（检查 tts_mode / enable_edge_tts / Gemini TTS Provider）。",
             )
         if (
             self._conf_bool("enabled", True)
             and self._conf_bool("enable_voice", True)
-            and self._conf_bool("enable_edge_tts", True)
-            and edge_ok
+            and tts_ok
         ):
             self.context.activate_llm_tool("voice_say")
         else:
@@ -76,6 +78,19 @@ class VoiceFilePlugin(Star):
             self.context.activate_llm_tool("read_file")
         else:
             self.context.deactivate_llm_tool("read_file")
+
+    def _tts_available(self) -> bool:
+        mode = str(self._conf("tts_mode", "edge_tts") or "edge_tts").strip().lower()
+        if mode == "gemini_tts":
+            provider_id = str(
+                self._conf("gemini_tts_provider_id", "gemini_tts") or "",
+            ).strip()
+            return (
+                self.context.get_provider_by_id(provider_id) is not None
+                if provider_id
+                else False
+            )
+        return self._conf_bool("enable_edge_tts", True) and self._edge_tts_available()
 
     @staticmethod
     def _edge_tts_available() -> bool:
@@ -134,16 +149,6 @@ class VoiceFilePlugin(Star):
     # ------------------------------------------------------------------ 语音
 
     async def _synthesize(self, text: str) -> Path:
-        if not self._conf_bool("enable_edge_tts", True):
-            raise VoiceFileError("Edge-TTS 已在插件配置中关闭（enable_edge_tts=false）。")
-        try:
-            import edge_tts
-        except Exception as exc:
-            raise VoiceFileError(
-                "未安装 edge-tts，无法合成语音。可以 pip install edge-tts，"
-                "或在插件配置里关闭 enable_edge_tts。",
-            ) from exc
-
         text = (text or "").strip()
         if not text:
             raise VoiceFileError("没有要说的内容。")
@@ -152,11 +157,39 @@ class VoiceFilePlugin(Star):
         if max_chars > 0 and len(text) > max_chars:
             raise VoiceFileError(f"文本太长了（{len(text)} 字，上限 {max_chars} 字）。")
 
-        voice = str(self._conf("voice_name", "zh-CN-XiaoxiaoNeural") or "zh-CN-XiaoxiaoNeural")
-        rate = str(self._conf("voice_rate", "") or "").strip()
-
         self.tts_dir.mkdir(parents=True, exist_ok=True)
         self._cleanup_old_files()
+
+        mode = str(self._conf("tts_mode", "edge_tts") or "edge_tts").strip().lower()
+        if mode == "gemini_tts":
+            try:
+                wav_path = await self._gemini_tts_wav(text)
+            except VoiceFileError as exc:
+                if self._conf_bool("enable_edge_tts", True) and self._edge_tts_available():
+                    logger.warning(f"[voice_file] Gemini TTS 失败，回退 Edge-TTS：{exc}")
+                    wav_path = await self._edge_tts_wav(text)
+                else:
+                    raise
+        else:
+            wav_path = await self._edge_tts_wav(text)
+
+        if self._conf_bool("rvc_enable", False):
+            wav_path = await self._rvc_voice(wav_path)
+        return wav_path
+
+    async def _edge_tts_wav(self, text: str) -> Path:
+        if not self._conf_bool("enable_edge_tts", True):
+            raise VoiceFileError("Edge-TTS 已在插件配置中关闭（enable_edge_tts=false）。")
+        try:
+            import edge_tts
+        except Exception as exc:
+            raise VoiceFileError(
+                "未安装 edge-tts，无法合成语音。可以 pip install edge-tts，"
+                "或把 tts_mode 改成 gemini_tts。",
+            ) from exc
+
+        voice = str(self._conf("voice_name", "zh-CN-XiaoxiaoNeural") or "zh-CN-XiaoxiaoNeural")
+        rate = str(self._conf("voice_rate", "") or "").strip()
 
         stem = uuid.uuid4().hex
         mp3_path = self.tts_dir / f"{stem}.mp3"
@@ -173,25 +206,77 @@ class VoiceFilePlugin(Star):
         except Exception as exc:
             raise VoiceFileError(f"语音合成失败：{exc}") from exc
 
-        ffmpeg = self._ffmpeg_path()
-
         src_wav = self.tts_dir / f"{stem}_edge.wav"
         await self._ffmpeg_convert(mp3_path, src_wav, ["-ar", "16000", "-ac", "1"])
-
-        if self._conf_bool("rvc_enable", False):
-            rvc_wav = self.tts_dir / f"{stem}_rvc.wav"
-            await self._rvc_convert(src_wav, rvc_wav)
-            out_wav = self.tts_dir / f"{stem}.wav"
-            await self._ffmpeg_convert(rvc_wav, out_wav, ["-ar", "24000", "-ac", "1"])
-            for leftover in (mp3_path, src_wav, rvc_wav):
-                leftover.unlink(missing_ok=True)
-            return out_wav
-
         out_wav = self.tts_dir / f"{stem}.wav"
         await self._ffmpeg_convert(src_wav, out_wav, ["-ar", "24000", "-ac", "1"])
         for leftover in (mp3_path, src_wav):
             leftover.unlink(missing_ok=True)
         return out_wav
+
+    async def _gemini_tts_wav(self, text: str) -> Path:
+        provider_id = str(
+            self._conf("gemini_tts_provider_id", "gemini_tts") or "gemini_tts",
+        ).strip()
+        provider = self.context.get_provider_by_id(provider_id) if provider_id else None
+        if provider is None:
+            raise VoiceFileError(f"找不到 Gemini TTS Provider：{provider_id}")
+
+        client = getattr(provider, "client", None)
+        model = str(getattr(provider, "model", "") or "")
+        voice = str(getattr(provider, "voice_name", "Aoede") or "Aoede")
+        if client is None or not model:
+            raise VoiceFileError("Gemini TTS Provider 不可用（缺少 client/model）。")
+
+        prefix = str(self._conf("gemini_tts_prefix", "") or "").strip()
+        prompt = f"{prefix}\n{text}" if prefix else text
+        try:
+            from google.genai import types
+
+            response = await asyncio.wait_for(
+                client.models.generate_content(
+                    model=model,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        response_modalities=["AUDIO"],
+                        speech_config=types.SpeechConfig(
+                            voice_config=types.VoiceConfig(
+                                prebuilt_voice_config=types.PrebuiltVoiceConfig(
+                                    voice_name=voice,
+                                ),
+                            ),
+                        ),
+                    ),
+                ),
+                timeout=self._conf_int("gemini_tts_timeout_seconds", 120),
+            )
+            part = response.candidates[0].content.parts[0]
+            audio_bytes = part.inline_data.data
+            if not audio_bytes:
+                raise VoiceFileError("Gemini TTS 没有返回音频数据。")
+        except VoiceFileError:
+            raise
+        except Exception as exc:
+            raise VoiceFileError(f"Gemini TTS 合成失败：{exc}") from exc
+
+        out_wav = self.tts_dir / f"{uuid.uuid4().hex}.wav"
+        try:
+            with wave.open(str(out_wav), "wb") as handle:
+                handle.setnchannels(1)
+                handle.setsampwidth(2)
+                handle.setframerate(24000)
+                handle.writeframes(audio_bytes)
+        except Exception as exc:
+            raise VoiceFileError(f"Gemini TTS 音频写入失败：{exc}") from exc
+        return out_wav
+
+    async def _rvc_voice(self, src_wav: Path) -> Path:
+        out_wav = self.tts_dir / f"{uuid.uuid4().hex}_rvc.wav"
+        await self._rvc_convert(src_wav, out_wav)
+        final_wav = self.tts_dir / f"{uuid.uuid4().hex}.wav"
+        await self._ffmpeg_convert(out_wav, final_wav, ["-ar", "24000", "-ac", "1"])
+        out_wav.unlink(missing_ok=True)
+        return final_wav
 
     def _ffmpeg_path(self) -> str:
         ffmpeg = str(self._conf("ffmpeg_path", "ffmpeg") or "ffmpeg")
@@ -333,15 +418,104 @@ class VoiceFilePlugin(Star):
             pass
 
     async def _send_voice(self, event: AstrMessageEvent, wav_path: Path) -> None:
+        silk_path = await self._to_silk(wav_path)
+        if silk_path is not None and await self._send_silk_to_event(event, silk_path):
+            return
         await event.send(MessageChain(chain=[Record(file=str(wav_path))]))
 
+    async def _to_silk(self, wav_path: Path) -> Path | None:
+        if not self._conf_bool("silk_enable", True):
+            return None
+        try:
+            import pysilk
+        except Exception as exc:
+            logger.debug(f"[voice_file] 未安装 pysilk，跳过 Silk 编码：{exc}")
+            return None
+        silk_path = wav_path.with_suffix(".silk")
+
+        def _encode() -> None:
+            with open(wav_path, "rb") as source, open(silk_path, "wb") as target:
+                pysilk.encode(source, target, 24000, 24000)
+
+        try:
+            await asyncio.to_thread(_encode)
+        except Exception as exc:
+            logger.warning(f"[voice_file] Silk 编码失败，回退 WAV：{exc}")
+            return None
+        if not silk_path.exists() or silk_path.stat().st_size == 0:
+            return None
+        return silk_path
+
+    @staticmethod
+    def _record_segment(path: Path) -> dict:
+        return {"type": "record", "data": {"file": path.as_uri()}}
+
+    async def _send_silk_to_event(
+        self,
+        event: AstrMessageEvent,
+        silk_path: Path,
+    ) -> bool:
+        bot = getattr(event, "bot", None)
+        if bot is None:
+            return False
+        message = [self._record_segment(silk_path)]
+        try:
+            group_id = event.get_group_id()
+            if group_id:
+                await bot.call_action(
+                    "send_group_msg",
+                    group_id=int(group_id),
+                    message=message,
+                )
+            else:
+                await bot.call_action(
+                    "send_private_msg",
+                    user_id=int(event.get_sender_id()),
+                    message=message,
+                )
+            return True
+        except Exception as exc:
+            logger.warning(f"[voice_file] 发送 Silk 失败，回退 WAV：{exc}")
+            return False
+
+    async def _send_silk_to_umo(self, umo: str, silk_path: Path) -> bool:
+        try:
+            platform = self.context.get_platform("aiocqhttp")
+        except Exception:
+            return False
+        bot = getattr(platform, "bot", None) if platform is not None else None
+        if bot is None:
+            return False
+        try:
+            session = MessageSession.from_str(umo)
+            message = [self._record_segment(silk_path)]
+            if session.message_type == MessageType.GROUP_MESSAGE:
+                await bot.call_action(
+                    "send_group_msg",
+                    group_id=int(session.session_id),
+                    message=message,
+                )
+            else:
+                await bot.call_action(
+                    "send_private_msg",
+                    user_id=int(session.session_id),
+                    message=message,
+                )
+            return True
+        except Exception as exc:
+            logger.warning(f"[voice_file] 主动发送 Silk 失败，回退 WAV：{exc}")
+            return False
+
     async def synthesize_voice(self, text: str) -> Path:
-        """供其它插件调用：文字 → 语音文件路径。"""
+        """供其它插件调用：文字 → 语音文件路径（WAV）。"""
         return await self._synthesize(text)
 
     async def send_voice_to(self, umo: str, text: str) -> bool:
         """供其它插件调用：把文字合成语音并发送到指定会话。"""
         wav_path = await self._synthesize(text)
+        silk_path = await self._to_silk(wav_path)
+        if silk_path is not None and await self._send_silk_to_umo(umo, silk_path):
+            return True
         return bool(
             await self.context.send_message(
                 umo,
@@ -523,20 +697,32 @@ class VoiceFilePlugin(Star):
         return str(out)
 
     async def _transcribe(self, wav_path: str) -> str:
+        mode = str(self._conf("stt_mode", "local") or "local").strip().lower()
         try:
             mtime = os.path.getmtime(wav_path)
         except OSError:
             return ""
-        key = (wav_path, mtime)
-        if key in self._transcript_cache:
-            return self._transcript_cache[key]
+        key = (mode, wav_path, mtime)
+        cached = self._transcript_cache.get(key)
+        if cached is not None:
+            return cached
 
+        if mode == "gemini":
+            text = await self._transcribe_gemini(wav_path)
+        else:
+            local_text = await self._transcribe_local(wav_path)
+            text = f"[语音消息]\n转写：{local_text}" if local_text else ""
+
+        if len(self._transcript_cache) > 128:
+            self._transcript_cache.clear()
+        self._transcript_cache[key] = text
+        return text
+
+    async def _transcribe_local(self, wav_path: str) -> str:
         recognizer = await self._get_recognizer()
         normalized = await self._to_16k_wav(wav_path)
 
         def _decode() -> str:
-            import wave
-
             import numpy as np
 
             with wave.open(normalized, "rb") as handle:
@@ -552,11 +738,90 @@ class VoiceFilePlugin(Star):
             recognizer.decode_stream(stream)
             return (stream.result.text or "").strip()
 
-        text = await asyncio.to_thread(_decode)
-        if len(self._transcript_cache) > 128:
-            self._transcript_cache.clear()
-        self._transcript_cache[key] = text
-        return text
+        return await asyncio.to_thread(_decode)
+
+    def _gemini_stt_provider_ids(self) -> list[str]:
+        primary = str(
+            self._conf(
+                "gemini_stt_provider_id",
+                "google_gemini/gemini-3.5-transcribe",
+            )
+            or "",
+        ).strip()
+        fallbacks = self._conf("gemini_stt_fallback_provider_ids", []) or []
+        ids: list[str] = []
+        for item in [primary, *fallbacks]:
+            pid = str(item).strip()
+            if pid and pid not in ids:
+                ids.append(pid)
+        return ids
+
+    async def _transcribe_gemini(self, wav_path: str) -> str:
+        prompt = (
+            "你在做语音理解。听这段语音，只输出严格的 JSON（不要 Markdown、不要解释）：\n"
+            '{"transcript":"逐字转写，保留语气词",'
+            '"background_music":"有/无，简短描述",'
+            '"emotion":"说话人的情绪",'
+            '"summary":"一句话概括这段话"}'
+        )
+        last_error = ""
+        for pid in self._gemini_stt_provider_ids():
+            provider = self.context.get_provider_by_id(pid)
+            if provider is None:
+                logger.warning(f"[voice_file] Gemini STT Provider 不存在：{pid}")
+                continue
+            try:
+                response = await asyncio.wait_for(
+                    provider.text_chat(
+                        prompt=prompt,
+                        audio_urls=[wav_path],
+                        contexts=[],
+                    ),
+                    timeout=self._conf_int("gemini_stt_timeout_seconds", 90),
+                )
+                raw = str(getattr(response, "completion_text", "") or "").strip()
+                if raw:
+                    return self._format_voice_context(raw)
+                last_error = "empty completion"
+            except Exception as exc:
+                last_error = str(exc)
+                logger.warning(f"[voice_file] Gemini 转写失败 provider={pid}：{exc}")
+
+        if self._conf_bool("stt_fallback_local", True):
+            logger.warning("[voice_file] Gemini 转写不可用，回退本地 SenseVoice")
+            local_text = await self._transcribe_local(wav_path)
+            return f"[语音消息]\n转写：{local_text}" if local_text else ""
+        raise VoiceFileError(f"Gemini 转写失败：{last_error or 'no provider'}")
+
+    @staticmethod
+    def _format_voice_context(raw: str) -> str:
+        text = str(raw or "").strip()
+        if text.startswith("```"):
+            text = text.strip("`").strip()
+            if text.lower().startswith("json"):
+                text = text[4:].strip()
+        data = None
+        start = text.find("{")
+        end = text.rfind("}")
+        if start >= 0 and end > start:
+            try:
+                data = json.loads(text[start : end + 1])
+            except Exception:
+                data = None
+        if not isinstance(data, dict):
+            return f"[语音消息]\n转写：{text}".strip()
+        lines = ["[语音消息]"]
+        mapping = (
+            ("transcript", "转写"),
+            ("background_music", "背景音乐"),
+            ("emotion", "情绪"),
+            ("summary", "概括"),
+        )
+        for key, label in mapping:
+            value = str(data.get(key) or "").strip()
+            if value:
+                lines.append(f"{label}：{value}")
+        return "\n".join(lines)
 
     def _voice_paths(self, event: AstrMessageEvent, request=None) -> list[str]:
         paths: list[str] = []
@@ -662,10 +927,9 @@ class VoiceFilePlugin(Star):
             return
 
         prompt = getattr(request, "prompt", "") or ""
-        if "[用户发来一条语音" in prompt:
+        if "[语音消息]" in prompt:
             return
-        chunks = [f"[用户发来一条语音，转写内容：{text}]" for text in texts]
-        request.prompt = prompt + "\n" + "\n".join(chunks)
+        request.prompt = prompt + "\n" + "\n".join(texts)
 
     @staticmethod
     def _strip_audio_parts(request: ProviderRequest) -> None:

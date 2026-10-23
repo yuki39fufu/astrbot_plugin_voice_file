@@ -4,7 +4,15 @@
 
 ## 语音识别（她听语音）
 
-本地 SenseVoice，用 `sherpa-onnx` 运行时，不需要 torch，也不需要 API key。
+两种模式，由 `stt_mode` 选择：
+
+| 模式 | 说明 |
+|---|---|
+| `local` | 本地 SenseVoice + sherpa-onnx，免费离线，只转写文字 |
+| `gemini` | 调用 Gemini（默认 `gemini-3.5-transcribe`），一次返回**转写、背景音乐、情绪、概括**，再交给主模型做人设化回复 |
+
+`gemini` 模式下可配置回退 Provider 列表（`gemini_stt_fallback_provider_ids`），并默认
+在全部失败时回退本地 SenseVoice（`stt_fallback_local`）。
 
 - 模型目录：留空时使用 `{插件数据目录}/models/sherpa-onnx-sense-voice-…`，
   也可以填绝对路径（例如 `D:\AI\Models\...` 或 `/opt/models/...`）
@@ -43,8 +51,12 @@
 | 指令 | `/语音 <文本>` |
 | LLM 工具 | `voice_say(text)`，模型自己决定要不要用声音 |
 
-Edge-TTS 生成基础语音，然后（可选）用 RVC 模型把音色换成你的声音库。
-音色在配置 `voice_name` 里改（如 `zh-CN-YunxiNeural`）。
+Edge-TTS 或 Gemini TTS 生成基础语音，然后（可选）用 RVC 模型把音色换成你的声音库，
+最后编码成 Silk 交给 NapCat（失败自动回退 WAV）。
+
+- `tts_mode=edge_tts`：免费、无需 key，音色在 `voice_name` 改
+- `tts_mode=gemini_tts`：走 AstrBot 里的 Gemini TTS Provider，`gemini_tts_prefix`
+  用于设定情绪/表演提示（默认已按 rinka 的软、懒、亲近语气写好）
 
 ### RVC 变声（Windows，默认关闭）
 
@@ -77,9 +89,17 @@ Edge-TTS 生成基础语音，然后（可选）用 RVC 模型把音色换成你
 | `voice_name` | `zh-CN-XiaoxiaoNeural` | Edge-TTS 音色 |
 | `voice_rate` | 空 | 语速，如 `+10%` |
 | `voice_max_chars` | `300` | 单条语音最大字数 |
-| `stt_enable` | `true` | 本地 SenseVoice 语音识别开关 |
-| `stt_model_dir` | 空 | 留空用插件数据目录下的模型 |
+| `stt_enable` | `true` | 语音识别总开关 |
+| `stt_mode` | `local` | `local` 本地 SenseVoice / `gemini` Gemini 理解 |
+| `gemini_stt_provider_id` | `google_gemini/gemini-3.5-transcribe` | Gemini 语音理解主 Provider |
+| `gemini_stt_fallback_provider_ids` | 3.8-flash、3.5-flash | 503/504 时依次回退 |
+| `stt_fallback_local` | `true` | Gemini 全失败时回退本地识别 |
+| `tts_mode` | `edge_tts` | `edge_tts` 或 `gemini_tts` |
+| `gemini_tts_provider_id` | `gemini_tts` | AstrBot 里的 Gemini TTS Provider id |
+| `gemini_tts_prefix` | 见配置 | Gemini TTS 情绪/表演前缀 |
+| `silk_enable` | `true` | 发送前编码为 Silk，失败回退 WAV |
 | `rvc_enable` | `false` | RVC 变声开关（Windows） |
+| `stt_model_dir` | 空 | 留空用插件数据目录下的模型 |
 | `enable_read_file_tool` | `true` | 是否允许读本机文件 |
 | `attachment_auto_read` | `true` | 是否自动读聊天附件 |
 | `file_extensions` | 常见文本后缀 | 允许的后缀 |

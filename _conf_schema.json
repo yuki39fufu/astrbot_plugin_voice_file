@@ -35,6 +35,39 @@
     "hint": "auto / zh / en / ja / ko / yue，默认 auto。",
     "default": "auto"
   },
+  "stt_mode": {
+    "description": "语音输入模式",
+    "type": "string",
+    "hint": "local = 本地 SenseVoice；gemini = 调用 Gemini 模型理解语音（转写 + 背景音乐 + 情绪）。",
+    "default": "local"
+  },
+  "gemini_stt_provider_id": {
+    "description": "Gemini 语音理解 Provider",
+    "type": "string",
+    "hint": "默认 google_gemini/gemini-3.5-transcribe；需在 AstrBot 模型提供商里启用。",
+    "default": "google_gemini/gemini-3.5-transcribe"
+  },
+  "gemini_stt_fallback_provider_ids": {
+    "description": "Gemini 语音理解回退 Provider",
+    "type": "list",
+    "hint": "主 Provider 503/504 时按顺序尝试，例如 google_gemini/gemini-3.8-flash、google_gemini/gemini-3.5-flash。",
+    "default": [
+      "google_gemini/gemini-3.8-flash",
+      "google_gemini/gemini-3.5-flash"
+    ]
+  },
+  "gemini_stt_timeout_seconds": {
+    "description": "Gemini 语音理解超时（秒）",
+    "type": "int",
+    "hint": "单次请求超时，超时后尝试下一个 Provider。",
+    "default": 90
+  },
+  "stt_fallback_local": {
+    "description": "Gemini 失败时回退本地识别",
+    "type": "bool",
+    "hint": "Gemini 不可用时用本地 SenseVoice 兜底，避免语音完全丢失。",
+    "default": true
+  },
   "voice_name": {
     "description": "Edge-TTS 音色",
     "type": "string",
@@ -52,6 +85,36 @@
     "type": "int",
     "hint": "超过会拒绝合成，避免一条语音过长。",
     "default": 300
+  },
+  "tts_mode": {
+    "description": "语音输出模式",
+    "type": "string",
+    "hint": "edge_tts = 免费 Edge-TTS；gemini_tts = Gemini TTS（支持情绪前缀，需要已配置 Gemini TTS Provider）。",
+    "default": "edge_tts"
+  },
+  "gemini_tts_provider_id": {
+    "description": "Gemini TTS Provider",
+    "type": "string",
+    "hint": "在 AstrBot 模型提供商里添加的 Gemini TTS 的 id，默认 gemini_tts。",
+    "default": "gemini_tts"
+  },
+  "gemini_tts_prefix": {
+    "description": "Gemini TTS 情绪/表演前缀",
+    "type": "text",
+    "hint": "会拼在正文前传给 Gemini TTS，用来控制语气、语速与情绪。",
+    "default": "[Style: 年轻女生说中文，声音软而轻，语气亲密自然，带一点刚睡醒的慵懒和轻微撒娇；语速偏慢，句尾放松，偶尔轻轻笑一下；不要播音腔，不要夸张表演，不要念稿感。]"
+  },
+  "gemini_tts_timeout_seconds": {
+    "description": "Gemini TTS 超时（秒）",
+    "type": "int",
+    "hint": "单次合成超时。",
+    "default": 120
+  },
+  "silk_enable": {
+    "description": "发送前转成 Silk",
+    "type": "bool",
+    "hint": "开启后先编码为 QQ 语音 Silk 再交给 NapCat；失败会自动回退 WAV。",
+    "default": true
   },
   "rvc_enable": {
     "description": "启用 RVC 变声",
