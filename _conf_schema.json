@@ -1,0 +1,182 @@
+{
+  "enabled": {
+    "description": "启用语音与文件插件",
+    "type": "bool",
+    "hint": "总开关。",
+    "default": true
+  },
+  "enable_voice": {
+    "description": "启用 AI 语音发送",
+    "type": "bool",
+    "hint": "关闭后 /语音 和 voice_say 工具不可用。",
+    "default": true
+  },
+  "enable_edge_tts": {
+    "description": "启用 Edge-TTS 语音合成",
+    "type": "bool",
+    "hint": "关闭后 /语音 与 voice_say 不可用，但语音识别、文件读取等其它功能不受影响。Arch 等装不了 edge-tts 的平台请关闭此开关。",
+    "default": true
+  },
+  "stt_enable": {
+    "description": "启用语音识别（听语音）",
+    "type": "bool",
+    "hint": "开启后收到语音消息会用本地 SenseVoice 模型转成文字。若 AstrBot 自带 STT 也开着，会重复识别，建议只开一个。",
+    "default": true
+  },
+  "stt_model_dir": {
+    "description": "SenseVoice 模型目录",
+    "type": "string",
+    "hint": "留空则使用 {插件数据目录}/models/sherpa-onnx-sense-voice-…；也可填绝对路径。",
+    "default": ""
+  },
+  "stt_language": {
+    "description": "识别语言",
+    "type": "string",
+    "hint": "auto / zh / en / ja / ko / yue，默认 auto。",
+    "default": "auto"
+  },
+  "voice_name": {
+    "description": "Edge-TTS 音色",
+    "type": "string",
+    "hint": "例如 zh-CN-XiaoxiaoNeural（女）、zh-CN-YunxiNeural（男）、zh-CN-XiaoyiNeural。更多可用 /语音 试。",
+    "default": "zh-CN-XiaoxiaoNeural"
+  },
+  "voice_rate": {
+    "description": "语速调整",
+    "type": "string",
+    "hint": "例如 +10% 加快、-10% 放慢，留空为默认。",
+    "default": ""
+  },
+  "voice_max_chars": {
+    "description": "单条语音最大字数",
+    "type": "int",
+    "hint": "超过会拒绝合成，避免一条语音过长。",
+    "default": 300
+  },
+  "rvc_enable": {
+    "description": "启用 RVC 变声",
+    "type": "bool",
+    "hint": "默认关闭。开启后需要配置 rvc_dir、rvc_model 等 Windows/RVC 相关路径。",
+    "default": false
+  },
+  "rvc_dir": {
+    "description": "RVC 目录",
+    "type": "string",
+    "hint": "包含 runtime/python.exe 与 infer 文件夹的根目录。",
+    "default": ""
+  },
+  "rvc_python": {
+    "description": "RVC 的 Python 路径",
+    "type": "string",
+    "hint": "留空则自动使用 {rvc_dir}\\runtime\\python.exe。",
+    "default": ""
+  },
+  "rvc_weight_root": {
+    "description": "模型目录",
+    "type": "string",
+    "hint": "存放 .pth 的目录。",
+    "default": ""
+  },
+  "rvc_model": {
+    "description": "RVC 模型文件名",
+    "type": "string",
+    "hint": "例如 ailian.pth。",
+    "default": ""
+  },
+  "rvc_index": {
+    "description": "特征索引文件",
+    "type": "string",
+    "hint": "与模型配套的 .index 路径；留空则不用索引（音色相似度会略低）。",
+    "default": ""
+  },
+  "rvc_pitch": {
+    "description": "变调（半音）",
+    "type": "int",
+    "hint": "0 为不变；男声模型转女声源可试 +12，女声模型转男声 -12。",
+    "default": 0
+  },
+  "rvc_f0_method": {
+    "description": "音高提取方法",
+    "type": "string",
+    "hint": "rmvpe（质量好）/ pm（快、占用低）。",
+    "default": "rmvpe"
+  },
+  "rvc_index_rate": {
+    "description": "索引混合比例",
+    "type": "float",
+    "hint": "0~1，越高越接近训练音色，过高可能有杂音。",
+    "default": 0.75
+  },
+  "rvc_protect": {
+    "description": "气声保护",
+    "type": "float",
+    "hint": "0~0.5，保护清辅音与呼吸声。",
+    "default": 0.33
+  },
+  "rvc_timeout_seconds": {
+    "description": "单次变声超时（秒）",
+    "type": "int",
+    "hint": "首次会加载模型，给足时间。",
+    "default": 180
+  },
+  "ffmpeg_path": {
+    "description": "ffmpeg 路径",
+    "type": "string",
+    "hint": "默认使用 PATH 里的 ffmpeg；Windows/Linux 均可填绝对路径，如 /usr/bin/ffmpeg。",
+    "default": "ffmpeg"
+  },
+  "enable_read_file_tool": {
+    "description": "允许她读取本机文本文件",
+    "type": "bool",
+    "hint": "开启后 LLM 可通过 read_file 工具读管理员指定的文本文件。",
+    "default": true
+  },
+  "attachment_auto_read": {
+    "description": "自动读取聊天里的文本附件",
+    "type": "bool",
+    "hint": "你在 QQ 里直接发 txt/md/csv 等文件给她时，自动把内容放进上下文。",
+    "default": true
+  },
+  "file_extensions": {
+    "description": "允许读取的文件后缀",
+    "type": "list",
+    "hint": "不在列表里的后缀会被拒绝。",
+    "default": [
+      ".txt",
+      ".md",
+      ".markdown",
+      ".csv",
+      ".tsv",
+      ".json",
+      ".yaml",
+      ".yml",
+      ".log",
+      ".ini",
+      ".conf",
+      ".py",
+      ".js",
+      ".ts",
+      ".html",
+      ".css",
+      ".xml"
+    ]
+  },
+  "file_max_kb": {
+    "description": "单个文件大小上限（KB）",
+    "type": "int",
+    "hint": "超过该大小拒绝读取。",
+    "default": 256
+  },
+  "attachment_max_chars": {
+    "description": "注入上下文的字符上限",
+    "type": "int",
+    "hint": "附件或本地文件内容超过该长度会被截断。",
+    "default": 4000
+  },
+  "extra_whitelist": {
+    "description": "额外允许使用的 QQ 号",
+    "type": "list",
+    "hint": "除 AstrBot 管理员外，这些 QQ 号也能使用语音与文件功能。",
+    "default": []
+  }
+}
