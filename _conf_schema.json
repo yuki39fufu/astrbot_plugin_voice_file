@@ -92,6 +92,18 @@
     "hint": "edge_tts = 免费 Edge-TTS；gemini_tts = Gemini TTS（支持情绪前缀，需要已配置 Gemini TTS Provider）。",
     "default": "edge_tts"
   },
+  "edge_tts_pitch_semitones": {
+    "description": "Edge-TTS 变调（半音）",
+    "type": "float",
+    "hint": "在 Edge-TTS 输出上做变调，保持时长；-2 表示降两个半音。与 rvc_pitch 叠加。",
+    "default": -2.0
+  },
+  "gemini_tts_pitch_semitones": {
+    "description": "Gemini TTS 变调（半音）",
+    "type": "float",
+    "hint": "Gemini TTS 不支持原生 pitch，这里在合成后做变调；1 表示升一个半音。与 rvc_pitch 叠加。",
+    "default": 1.0
+  },
   "gemini_tts_provider_id": {
     "description": "Gemini TTS Provider",
     "type": "string",

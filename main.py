@@ -161,6 +161,7 @@ class VoiceFilePlugin(Star):
         self._cleanup_old_files()
 
         mode = str(self._conf("tts_mode", "edge_tts") or "edge_tts").strip().lower()
+        engine = mode
         if mode == "gemini_tts":
             try:
                 wav_path = await self._gemini_tts_wav(text)
@@ -168,14 +169,59 @@ class VoiceFilePlugin(Star):
                 if self._conf_bool("enable_edge_tts", True) and self._edge_tts_available():
                     logger.warning(f"[voice_file] Gemini TTS 失败，回退 Edge-TTS：{exc}")
                     wav_path = await self._edge_tts_wav(text)
+                    engine = "edge_tts"
                 else:
                     raise
         else:
             wav_path = await self._edge_tts_wav(text)
 
+        pitch_key = (
+            "gemini_tts_pitch_semitones"
+            if engine == "gemini_tts"
+            else "edge_tts_pitch_semitones"
+        )
+        default_pitch = 1.0 if engine == "gemini_tts" else -2.0
+        pitch = float(self._conf(pitch_key, default_pitch))
+        if abs(pitch) >= 0.01:
+            wav_path = await self._apply_pitch(wav_path, pitch, engine)
+
         if self._conf_bool("rvc_enable", False):
             wav_path = await self._rvc_voice(wav_path)
         return wav_path
+
+    async def _apply_pitch(self, wav_path: Path, semitones: float, engine: str) -> Path:
+        """按半音数变调，保持时长不变（TTS 输出统一为 24kHz）。"""
+        factor = 2.0 ** (semitones / 12.0)
+        tempo = 1.0 / factor
+        if not 0.5 <= tempo <= 2.0:
+            logger.warning(
+                "[voice_file] 变调 %.2f 半音超出 ffmpeg atempo 范围，跳过",
+                semitones,
+            )
+            return wav_path
+        out_wav = self.tts_dir / f"{uuid.uuid4().hex}_pitch.wav"
+        await self._ffmpeg_convert(
+            wav_path,
+            out_wav,
+            [
+                "-af",
+                (
+                    f"asetrate=24000*{factor:.6f},"
+                    f"aresample=24000,atempo={tempo:.6f}"
+                ),
+                "-ar",
+                "24000",
+                "-ac",
+                "1",
+            ],
+        )
+        wav_path.unlink(missing_ok=True)
+        logger.info(
+            "[voice_file] TTS 变调 engine=%s semitones=%+.2f",
+            engine,
+            semitones,
+        )
+        return out_wav
 
     async def _edge_tts_wav(self, text: str) -> Path:
         if not self._conf_bool("enable_edge_tts", True):

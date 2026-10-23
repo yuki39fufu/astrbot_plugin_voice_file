@@ -1,7 +1,7 @@
 name: astrbot_plugin_voice_file
 display_name: 语音与文件
 desc: 让她用 Edge-TTS 发语音（指令 + LLM 工具，Edge-TTS 可开关），并自动读取聊天里的 txt/md/csv 等文本附件，管理员也可读本机文本文件。
-version: v1.2.0
+version: v1.2.1
 author: rinka
 repo: https://github.com/yuki39fufu/astrbot_plugin_voice_file
 astrbot_version: ">=4.29.0"
